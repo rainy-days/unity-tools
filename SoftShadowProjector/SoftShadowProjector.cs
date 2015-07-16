@@ -1,7 +1,5 @@
-﻿using UnityEngine;
-using System.Collections;
-using System.Collections.Generic;
-using System;
+﻿using System;
+using UnityEngine;
 
 namespace RainyDays
 {
@@ -306,7 +304,7 @@ namespace RainyDays
 			shadowCam.enabled = false;
 			//Destroy(shadowCam);
 
-			Debug.Log("Created projector in " + (DateTime.Now - startTime).TotalMilliseconds.ToString("0.00") + " ms (blur = " + (blurEnd - blurStart).TotalMilliseconds.ToString("0.00") + " ms)", this);
+			Logger.Log("Created projector in " + (DateTime.Now - startTime).TotalMilliseconds.ToString("0.00") + " ms (blur = " + (blurEnd - blurStart).TotalMilliseconds.ToString("0.00") + " ms)", this);
 		}
 
 		void Update()
