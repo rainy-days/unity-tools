@@ -1,102 +1,92 @@
-﻿using System;
-using System.Diagnostics;
+﻿using System.Collections.Generic;
 using System.IO;
-using System.Text;
-using System.Threading;
 using UnityEngine;
 
 namespace RainyDays
 {
-#if UNITY_EDITOR
-	[UnityEditor.InitializeOnLoad]
-#endif
+	/// <summary>
+	/// Logging utility.
+	/// </summary>
 	public static class Logger
 	{
-		private static StreamWriter sLogFile;
 		private static object sSyncLock = new object();
+		private static List<ILogStream> sLogStreams = new List<ILogStream>();
+
+		public static string GetLogDirectory()
+		{
+#if UNITY_EDITOR
+			return Path.GetFullPath(Application.dataPath + "/../");
+#else
+			return Path.GetFullPath(Application.persistentDataPath);
+#endif
+		}
+
+		public static string CreateLogFilePath(string fileName)
+		{
+			return Path.Combine(GetLogDirectory(), fileName);
+		}
 
 		static Logger()
 		{
-#if UNITY_EDITOR
-			var logDir = Path.GetFullPath(Application.dataPath + "/../");
-#else
-			var logDir = Path.GetFullPath(Application.persistentDataPath);
-#endif
-			var logFileName = Path.Combine(logDir, "RainyDays.log");
-			sLogFile = new StreamWriter(logFileName, false, Encoding.UTF8);
-			sLogFile.AutoFlush = true;
-
-			sLogFile.WriteLine("-- Date: {0}", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff"));
-			sLogFile.WriteLine("-- Process: {0} ({1})", Process.GetCurrentProcess().MainModule.FileName, Process.GetCurrentProcess().Id);
-			sLogFile.WriteLine("-- Unity: {0}", Application.unityVersion);
-			sLogFile.WriteLine("-- Application: {0}, {1}, version {2}", Application.companyName, Application.productName, Application.version);
-			sLogFile.WriteLine("-- Environment: ({0} @ {1}), machine {2}, OS {3}", Environment.UserName, Environment.UserDomainName, Environment.MachineName, Environment.OSVersion.ToString());
-			sLogFile.WriteLine();
-
 			Application.logMessageReceivedThreaded += Application_logMessageReceivedThreaded;
-
-			// to consider:
-			//Console.SetOut(sLogFile);
-			//Console.SetError(sLogFile);
-
-			Log("Created " + logFileName);
-		}
-
-		private class LogEntry
-		{
-			public DateTime TimeStamp { get; private set; }
-			public string Header { get; private set; }
-			public int ThreadId { get; private set; }
-			public string Message { get; private set; }
-
-			public LogEntry(string header, string message, string stackTrace)
-			{
-				this.TimeStamp = DateTime.Now;
-				this.Header = header;
-				this.ThreadId = Thread.CurrentThread.ManagedThreadId;
-				// combine
-				var completeMessage = message + Environment.NewLine + stackTrace;
-				// indent
-				this.Message = completeMessage.Replace("\n", "\n\t");
-			}
-
-			public override string ToString()
-			{
- 				 return string.Format("{0},T{1},{2},{3}",
-					 TimeStamp.ToString("HH:mm:ss.fff"),
-					 ThreadId,
-					 Header,
-					 Message);
-			}
 		}
 
 		private static void Application_logMessageReceivedThreaded(string condition, string stackTrace, LogType type)
 		{
-			var entry = new LogEntry(type.ToString().ToUpperInvariant(), condition, stackTrace);
-			WriteLogEntry(entry);
+			WriteLogEntry(new LogEntry(type.ToString().ToUpperInvariant(), condition, stackTrace, true));
 		}
 
-		private static void WriteLogEntry(LogEntry entry)
+		public static void AddLogStream(ILogStream logStream)
 		{
+			Assert.IsNotNull(logStream);
 			lock (sSyncLock)
 			{
-				sLogFile.WriteLine(entry.ToString());
+				sLogStreams.Add(logStream);
 			}
 		}
 
-		public static void Log(string message)
+		public static bool RemoveLogStream(ILogStream logStream)
 		{
-			UnityEngine.Debug.Log(message);
+			Assert.IsNotNull(logStream);
+			lock (sSyncLock)
+			{
+				return sLogStreams.Remove(logStream);
+			}
 		}
 
-		public static void Log(string message, UnityEngine.Object context)
+		/// <summary>
+		/// Writes the given LogEntry to all log streams.
+		/// </summary>
+		/// <remarks>
+		/// Create your own LogEntry or ILogStream classes for custom logging.
+		/// </remarks>
+		public static void WriteLogEntry(LogEntry entry)
 		{
-			UnityEngine.Debug.Log(message, context);
+			lock (sSyncLock)
+			{
+				foreach (var logStream in sLogStreams)
+				{
+					logStream.WriteEntry(entry);
+				}
+			}
 		}
 
-		public static void LogFormat(string message, params object[] args)
+		/// <summary>
+		/// Logs the given message to the given log channel.
+		/// Does *not* log the message to the Unity console, and does not include the stack trace.
+		/// </summary>
+		public static void LogCustom(string channel, string message)
 		{
-			UnityEngine.Debug.LogFormat(message, args);
+			WriteLogEntry(new LogEntry(channel, message));
+		}
+
+		/// <summary>
+		/// Logs the given formatted message to the given log channel.
+		/// Does *not* log the message to the Unity console.
+		/// </summary>
+		public static void LogCustomFormat(string channel, string format, params object[] args)
+		{
+			WriteLogEntry(new LogEntry(channel, string.Format(format, args)));
 		}
 	}
 }

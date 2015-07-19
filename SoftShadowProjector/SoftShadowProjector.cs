@@ -304,7 +304,7 @@ namespace RainyDays
 			shadowCam.enabled = false;
 			//Destroy(shadowCam);
 
-			Logger.Log("Created projector in " + (DateTime.Now - startTime).TotalMilliseconds.ToString("0.00") + " ms (blur = " + (blurEnd - blurStart).TotalMilliseconds.ToString("0.00") + " ms)", this);
+			Debug.Log("Created projector in " + (DateTime.Now - startTime).TotalMilliseconds.ToString("0.00") + " ms (blur = " + (blurEnd - blurStart).TotalMilliseconds.ToString("0.00") + " ms)", this);
 		}
 
 		void Update()
