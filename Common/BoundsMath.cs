@@ -1,61 +1,110 @@
-﻿using UnityEngine;
-using System.Collections;
+﻿using System.Collections;
 using System.Collections.Generic;
+using UnityEngine;
 
 namespace RainyDays
 {
 	public static class BoundsMath
 	{
-		public static IEnumerable<Vector3> EnumCorners(Bounds bounds)
+		public struct CornerEnumerator : IEnumerator<Vector3>
 		{
-			var min = bounds.min;
-			var max = bounds.max;
-			yield return min;
-			yield return max;
-			yield return new Vector3(min.x, min.y, max.z);
-			yield return new Vector3(min.x, max.y, min.z);
-			yield return new Vector3(max.x, min.y, min.z);
-			yield return new Vector3(min.x, max.y, max.z);
-			yield return new Vector3(max.x, min.y, max.z);
-			yield return new Vector3(max.x, max.y, min.z);
+			private Vector3 _min, _max, _current;
+			private int _index;
+
+			public CornerEnumerator(Bounds b)
+			{
+				_min = b.min;
+				_max = b.max;
+				_index = -1;
+				_current = Vector3.zero;
+			}
+
+			public Vector3 Current
+			{
+				get { return _current; }
+			}
+
+			object IEnumerator.Current
+			{
+				get { return _current; }
+			}
+
+			public bool MoveNext()
+			{
+				++_index;
+				switch (_index)
+				{
+					case 0: _current = _min; break;
+					case 1: _current = _max; break;
+					case 2: _current = new Vector3(_min.x, _min.y, _max.z); break;
+					case 3: _current = new Vector3(_min.x, _max.y, _min.z); break;
+					case 4: _current = new Vector3(_max.x, _min.y, _min.z); break;
+					case 5: _current = new Vector3(_min.x, _max.y, _max.z); break;
+					case 6: _current = new Vector3(_max.x, _min.y, _max.z); break;
+					case 7: _current = new Vector3(_max.x, _max.y, _min.z); break;
+					default: break;
+				}
+				return _index < 8;
+			}
+
+			public void Reset()
+			{
+				_index = -1;
+			}
+
+			public void Dispose()
+			{
+			}
 		}
 
 		public static Bounds InverseTransform(Bounds bounds, Transform t)
 		{
-			var worldToLocal = t.worldToLocalMatrix;
-			var result = new Bounds(worldToLocal.MultiplyPoint(bounds.center), Vector3.zero);
-
-			foreach (var c in EnumCorners(bounds))
+			using (new ScopedProfilerSample("InverseTransform"))
 			{
-				result.Encapsulate(worldToLocal.MultiplyPoint(c));
+				var worldToLocal = t.worldToLocalMatrix;
+				var result = new Bounds(worldToLocal.MultiplyPoint(bounds.center), Vector3.zero);
+
+				var corners = new CornerEnumerator(bounds);
+				while (corners.MoveNext())
+				{
+					result.Encapsulate(worldToLocal.MultiplyPoint(corners.Current));
+				}
+				return result;
 			}
-			return result;
 		}
 
 		public static float MinDistanceFromPlane(Bounds bounds, Vector3 planeNormal, Vector3 planePoint)
 		{
-			float dist = float.MaxValue;
-			var plane = new Plane(planeNormal, planePoint);
-			foreach (var c in EnumCorners(bounds))
+			using (new ScopedProfilerSample("MinDistanceFromPlane"))
 			{
-				dist = Mathf.Min(dist, plane.GetDistanceToPoint(c));
+				float dist = float.MaxValue;
+				var plane = new Plane(planeNormal, planePoint);
+				var corners = new CornerEnumerator(bounds);
+				while (corners.MoveNext())
+				{
+					dist = Mathf.Min(dist, plane.GetDistanceToPoint(corners.Current));
+				}
+				return dist;
 			}
-			return dist;
 		}
 
 		public static float MaxProjectedDistanceFromPlane(Bounds bounds, Vector3 planeNormal, Vector3 planePoint, Vector3 projDir)
 		{
-			float dist = 0.0f, projDist;
-			var plane = new Plane(planeNormal, planePoint);
-			foreach (var c in EnumCorners(bounds))
+			using (new ScopedProfilerSample("MaxProjectedDistanceFromPlane"))
 			{
-				var ray = new Ray(c, projDir);
-				if (plane.Raycast(ray, out projDist))
+				float dist = 0.0f, projDist;
+				var plane = new Plane(planeNormal, planePoint);
+				var corners = new CornerEnumerator(bounds);
+				while (corners.MoveNext())
 				{
-					dist = Mathf.Max(dist, projDist);
+					var ray = new Ray(corners.Current, projDir);
+					if (plane.Raycast(ray, out projDist))
+					{
+						dist = Mathf.Max(dist, projDist);
+					}
 				}
+				return dist;
 			}
-			return dist;
 		}
 	}
 }

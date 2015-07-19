@@ -6,7 +6,7 @@ namespace RainyDays
 	/// <summary>
 	/// Creates a soft shadow for the host object, and projects it on a plane.
 	/// </summary>
-	public class SoftShadowProjector : MonoBehaviour
+	public class SoftShadowProjector : BaseBehaviour
 	{
 		public Light lightSource;
 		public GameObject receiver;
@@ -29,6 +29,8 @@ namespace RainyDays
 			kProjectorLayer = Layers.GetOrCreateByName("RainyDays-SoftShadowProjector");
 			kCreateProjectorLayer = Layers.GetOrCreateByName(Layers.IsolateLayerName);
 		}
+
+		#region Blur
 
 		private static readonly float[][] KawaseKernels = new float[][]
 		{
@@ -105,6 +107,8 @@ namespace RainyDays
 			RenderTexture.ReleaseTemporary(dst);
 		}
 
+		#endregion
+
 		public byte[] ExportShadowPNG()
 		{
 			if (!shadowRT)
@@ -139,116 +143,136 @@ namespace RainyDays
 			}
 		}
 
-		void Start()
+		private void Start()
 		{
-			ConfigureLayers();
+			using (ScopedProfilerSample("Checks"))
+			{
+				ConfigureLayers();
 
-			if (kProjectorLayer == -1 || kCreateProjectorLayer == -1)
-			{
-				return;
+				if (kProjectorLayer == -1 || kCreateProjectorLayer == -1)
+				{
+					return;
+				}
+
+				if (!lightSource || !receiver)
+				{
+					Debug.LogError("Light Source or Receiver not set", this);
+					return;
+				}
+				if (lightSource.type != LightType.Directional)
+				{
+					Debug.LogError("Only directional light sources supported. This light is of type: " + lightSource.type.ToString(), this);
+					return;
+				}
+				shadowTextureSize = Math.Max(64, Mathf.NextPowerOfTwo(shadowTextureSize));
+
+				if (lightSource.shadows != LightShadows.None)
+				{
+					// disable shadows on the source light since we're using projectors to replace them
+					lightSource.shadows = LightShadows.None;
+				}
 			}
 
-			var startTime = DateTime.Now;
-			if (!lightSource || !receiver)
-			{
-				Debug.LogError("Light Source or Receiver not set", this);
-				return;
-			}
-			if (lightSource.type != LightType.Directional)
-			{
-				Debug.LogError("Only directional light sources supported. This light is of type: " + lightSource.type.ToString(), this);
-				return;
-			}
-
-			shadowTextureSize = Math.Max(64, Mathf.NextPowerOfTwo(shadowTextureSize));
-
-			if (lightSource.shadows != LightShadows.None)
-			{
-				// disable shadows on the source light since we're using projectors to replace them
-				lightSource.shadows = LightShadows.None;
-			}
-
-			var shadowCaster = this.gameObject;
-			var renderers = shadowCaster.GetComponentsInChildren<Renderer>();
-			if (renderers.Length == 0)
-			{
-				Debug.LogError("No active renderer found on shadow caster", this);
-				return;
-			}
-			var bounds = renderers[0].bounds;
-			for (int i = 1; i < renderers.Length; ++i)
-			{
-				bounds.Encapsulate(renderers[i].bounds);
-			}
-			int[] oldLayers = new int[renderers.Length];
+			GameObject shadowCaster;
+			Renderer[] renderers;
+			Transform projectorTransform;
+			Bounds bounds;
+			float nearPlane, farPlane, orthoHalfSize;
 			int maskCreateProjector = 1 << kCreateProjectorLayer;
-			for (int i = 0; i < renderers.Length; ++i)
+			int blurIterations;
+			float[] blurKernel;
+
+			using (ScopedProfilerSample("Compute Frustum"))
 			{
-				oldLayers[i] = renderers[i].gameObject.layer;
-				renderers[i].gameObject.layer = kCreateProjectorLayer;
+				shadowCaster = this.gameObject;
+				renderers = shadowCaster.GetComponentsInChildren<Renderer>();
+				if (renderers.Length == 0)
+				{
+					Debug.LogError("No active renderer found on shadow caster", this);
+					return;
+				}
+				bounds = renderers[0].bounds;
+				for (int i = 1; i < renderers.Length; ++i)
+				{
+					bounds.Encapsulate(renderers[i].bounds);
+				}
+				int[] oldLayers = new int[renderers.Length];
+				for (int i = 0; i < renderers.Length; ++i)
+				{
+					oldLayers[i] = renderers[i].gameObject.layer;
+					renderers[i].gameObject.layer = kCreateProjectorLayer;
+				}
+
+				// create a projector GO and attach it to the light
+				projectorGo = new GameObject(shadowCaster.name + "-Projector");
+				projectorTransform = projectorGo.transform;
+				projectorTransform.SetParent(lightSource.transform, false);
+
+				// project bounds onto light XY plane
+				var localBounds = BoundsMath.InverseTransform(bounds, projectorTransform);
+				var projCenter = localBounds.center;
+				projCenter.z = 0.0f;
+				var projSize = localBounds.size;
+				projSize.z = 0.0f;
+				var orthoSize = Mathf.Max(projSize.x, projSize.y);
+				orthoSize *= 1.25f; // to allow some space for blurred shadows - todo: configurable? dynamic?
+				orthoHalfSize = orthoSize * 0.5f;
+				projSize.x = projSize.y = orthoSize;
+				var projBounds = new Bounds(projCenter, projSize);
+
+				// move the projector in front of the object
+				nearPlane = 0.1f;
+				float zOffset = BoundsMath.MinDistanceFromPlane(bounds, projectorTransform.forward, projectorTransform.position) - nearPlane;
+				Vector3 centerOffset = projBounds.center + new Vector3(0f, 0f, zOffset);
+				projectorTransform.localPosition += centerOffset;
+
+				// the far plane is the maximum projected distance of the AABB on the receiver plane (approximation)
+				float blurKernelSize;
+				blurKernel = SelectKawaseKernel(shadowTextureSize, out blurIterations, out blurKernelSize);
+				var receiverTransform = receiver.transform;
+				farPlane = BoundsMath.MaxProjectedDistanceFromPlane(bounds, receiverTransform.up, receiverTransform.position, projectorTransform.forward);
+				farPlane *= 1.0f + (blurKernelSize * 0.5f / (float)shadowTextureSize); // increase far plane to take blur into account (approximation)
+				farPlane += nearPlane;
 			}
 
-			// create a projector GO and attach it to the light
-			projectorGo = new GameObject(shadowCaster.name + "-Projector");
-			var projectorTransform = projectorGo.transform;
-			projectorTransform.SetParent(lightSource.transform, false);
+			Camera shadowCam;
 
-			// project bounds onto light XY plane
-			var localBounds = BoundsMath.InverseTransform(bounds, projectorTransform);
-			var projCenter = localBounds.center;
-			projCenter.z = 0.0f;
-			var projSize = localBounds.size;
-			projSize.z = 0.0f;
-			var orthoSize = Mathf.Max(projSize.x, projSize.y);
-			orthoSize *= 1.25f; // to allow some space for blurred shadows - todo: configurable? dynamic?
-			var orthoHalfSize = orthoSize * 0.5f;
-			projSize.x = projSize.y = orthoSize;
-			var projBounds = new Bounds(projCenter, projSize);
-
-			// move the projector in front of the object
-			float nearPlane = 0.1f;
-			float zOffset = BoundsMath.MinDistanceFromPlane(bounds, projectorTransform.forward, projectorTransform.position) - nearPlane;
-			Vector3 centerOffset = projBounds.center + new Vector3(0f, 0f, zOffset);
-			projectorTransform.localPosition += centerOffset;
-
-			// the far plane is the maximum projected distance of the AABB on the receiver plane (approximation)
-			int blurIterations;
-			float blurKernelSize;
-			float[] blurKernel = SelectKawaseKernel(shadowTextureSize, out blurIterations, out blurKernelSize);
-			var receiverTransform = receiver.transform;
-			float farPlane = BoundsMath.MaxProjectedDistanceFromPlane(bounds, receiverTransform.up, receiverTransform.position, projectorTransform.forward);
-			farPlane *= 1.0f + (blurKernelSize * 0.5f / (float)shadowTextureSize); // increase far plane to take blur into account (approximation)
-			farPlane += nearPlane;
-
-			// add a temp camera to render the shadow texture
-			var shadowCam = projectorGo.AddComponent<Camera>();
-			shadowCam.orthographic = true;
-			shadowCam.orthographicSize = orthoHalfSize;
-			shadowCam.nearClipPlane = nearPlane;
-			shadowCam.farClipPlane = farPlane;
-			shadowCam.renderingPath = RenderingPath.Forward;
-			shadowCam.hdr = false;
-			shadowCam.useOcclusionCulling = false;
-			shadowCam.clearFlags = CameraClearFlags.SolidColor;
-			shadowCam.backgroundColor = new Color(1f, 1f, 1f, 0f);
-			// setup render to texture
-			shadowRT = shadowCam.targetTexture = new RenderTexture(shadowTextureSize, shadowTextureSize, 24, RenderTextureFormat.ARGB32);
-			shadowRT.filterMode = FilterMode.Bilinear;
-			shadowRT.wrapMode = TextureWrapMode.Clamp;
-			shadowRT.generateMips = false;
-			shadowRT.Create();
-			// only render caster objects
-			shadowCam.cullingMask = maskCreateProjector;
-
-			shadowCam.RenderWithShader(Shader.Find("Hidden/RainyDays/ShadowReplacement"), null);
-
-			// blur
-			var blurStart = DateTime.Now;
-			KawaseBlur(shadowRT, blurKernel, blurIterations);
-			var blurEnd = DateTime.Now;
-
-			// draw 1px border to avoid clamping artifacts
+			using (ScopedProfilerSample("Setup Camera"))
 			{
+				// add a temp camera to render the shadow texture
+				shadowCam = projectorGo.AddComponent<Camera>();
+				shadowCam.orthographic = true;
+				shadowCam.orthographicSize = orthoHalfSize;
+				shadowCam.nearClipPlane = nearPlane;
+				shadowCam.farClipPlane = farPlane;
+				shadowCam.renderingPath = RenderingPath.Forward;
+				shadowCam.hdr = false;
+				shadowCam.useOcclusionCulling = false;
+				shadowCam.clearFlags = CameraClearFlags.SolidColor;
+				shadowCam.backgroundColor = new Color(1f, 1f, 1f, 0f);
+				// setup render to texture
+				shadowRT = shadowCam.targetTexture = new RenderTexture(shadowTextureSize, shadowTextureSize, 24, RenderTextureFormat.ARGB32);
+				shadowRT.filterMode = FilterMode.Bilinear;
+				shadowRT.wrapMode = TextureWrapMode.Clamp;
+				shadowRT.generateMips = false;
+				shadowRT.Create();
+				// only render caster objects
+				shadowCam.cullingMask = maskCreateProjector;
+			}
+
+			using (ScopedProfilerSample("Render"))
+			{
+				shadowCam.RenderWithShader(Shader.Find("Hidden/RainyDays/ShadowReplacement"), null);
+			}
+
+			using (ScopedProfilerSample("Blur"))
+			{
+				KawaseBlur(shadowRT, blurKernel, blurIterations);
+			}
+
+			using (ScopedProfilerSample("Draw Border"))
+			{
+				// draw 1px border to avoid clamping artifacts
 				RenderTexture.active = shadowRT;
 				GL.PushMatrix();
 				var borderMat = new Material(Shader.Find("Hidden/RainyDays/ShadowBorder"));
@@ -278,33 +302,37 @@ namespace RainyDays
 
 			int maskProjector = 1 << kProjectorLayer;
 
-			// setup projector component
-			var projector = projectorGo.AddComponent<Projector>();
-			projector.orthographic = true;
-			projector.orthographicSize = orthoHalfSize;
-			projector.nearClipPlane = nearPlane;
-			projector.farClipPlane = farPlane;
-			projectorMaterial = projector.material = new Material(Shader.Find("Hidden/RainyDays/ShadowProjector"));
-			projectorMaterial.SetTexture("_ShadowTex", shadowRT);
-			UpdateProjectorMaterial();
-			projector.ignoreLayers = maskProjector;
-
-			// set layers to Projector
-			for (int i = 0; i < renderers.Length; ++i)
+			using (ScopedProfilerSample("Create Projector"))
 			{
-				renderers[i].gameObject.layer = kProjectorLayer;
+				// setup projector component
+				var projector = projectorGo.AddComponent<Projector>();
+				projector.orthographic = true;
+				projector.orthographicSize = orthoHalfSize;
+				projector.nearClipPlane = nearPlane;
+				projector.farClipPlane = farPlane;
+				projectorMaterial = projector.material = new Material(Shader.Find("Hidden/RainyDays/ShadowProjector"));
+				projectorMaterial.SetTexture("_ShadowTex", shadowRT);
+				UpdateProjectorMaterial();
+				projector.ignoreLayers = maskProjector;
+
+				// set layers to Projector
+				for (int i = 0; i < renderers.Length; ++i)
+				{
+					renderers[i].gameObject.layer = kProjectorLayer;
+				}
+
+				// set the projector on the caster
+				projectorTransform.SetParent(this.transform, true);
 			}
 
-			// set the projector on the caster
-			projectorTransform.SetParent(this.transform, true);
-
-			// destroy camera
-			RenderTexture.active = null;
-			shadowCam.targetTexture = null;
-			shadowCam.enabled = false;
-			//Destroy(shadowCam);
-
-			Debug.Log("Created projector in " + (DateTime.Now - startTime).TotalMilliseconds.ToString("0.00") + " ms (blur = " + (blurEnd - blurStart).TotalMilliseconds.ToString("0.00") + " ms)", this);
+			using (ScopedProfilerSample("Clean Up"))
+			{
+				// destroy camera
+				RenderTexture.active = null;
+				shadowCam.targetTexture = null;
+				shadowCam.enabled = false;
+				Destroy(shadowCam);
+			}
 		}
 
 		void Update()

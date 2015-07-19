@@ -7,8 +7,6 @@ namespace RainyDays
 	{
 		public static readonly string IsolateLayerName = "RainyDays-Isolate";
 
-		private static readonly string TagManagerAssetPath = "ProjectSettings/TagManager.asset";
-
 		public static int GetOrCreateByName(string layerName)
 		{
 			int layer = LayerMask.NameToLayer(layerName);
@@ -22,7 +20,7 @@ namespace RainyDays
 
 				// note: if Unity changes its serialization this method breaks
 				// tested using "serializedVersion: 2" in Unity 5.1
-
+				const string TagManagerAssetPath = "ProjectSettings/TagManager.asset";
 				var tagManager = new UnityEditor.SerializedObject(UnityEditor.AssetDatabase.LoadAllAssetsAtPath(TagManagerAssetPath)[0]);
 				var prop = tagManager.GetIterator();
 				var success = false;

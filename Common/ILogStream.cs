@@ -131,7 +131,10 @@ namespace RainyDays
 		protected virtual void WriteHeader()
 		{
 			Writer.WriteLine("-- Date: {0}", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff"));
+#if UNITY_EDITOR
+			// FIXME: Process.GetCurrentProcess().MainModule crashes in built players?
 			Writer.WriteLine("-- Process: {0} ({1})", Process.GetCurrentProcess().MainModule.FileName, Process.GetCurrentProcess().Id);
+#endif
 			Writer.WriteLine("-- Unity: {0}", Application.unityVersion);
 			Writer.WriteLine("-- Application: {0}, {1}, version {2}", Application.companyName, Application.productName, Application.version);
 			Writer.WriteLine("-- Environment: ({0} @ {1}), machine {2}, OS {3}", Environment.UserName, Environment.UserDomainName, Environment.MachineName, Environment.OSVersion.ToString());
