@@ -72,6 +72,24 @@ namespace RainyDays
 		}
 
 		/// <summary>
+		/// Logs the given message to the default Unity Log channel.
+		/// Does *not* log the message to the Unity console, and does not include the stack trace.
+		/// </summary>
+		public static void Log(string message)
+		{
+			WriteLogEntry(new LogEntry(LogType.Log, message, string.Empty));
+		}
+
+		/// <summary>
+		/// Logs the given formatted message to the default Unity Log channel.
+		/// Does *not* log the message to the Unity console.
+		/// </summary>
+		public static void LogFormat(string format, params object[] args)
+		{
+			WriteLogEntry(new LogEntry(LogType.Log, string.Format(format, args), string.Empty));
+		}
+
+		/// <summary>
 		/// Logs the given message to the given log channel.
 		/// Does *not* log the message to the Unity console, and does not include the stack trace.
 		/// </summary>

@@ -37,6 +37,11 @@ namespace RainyDays
 		{
 		}
 
+		public LogEntry(LogType channel, string message, string stackTrace)
+			: this(channel.ToString().ToUpperInvariant(), message, stackTrace, true)
+		{
+		}
+
 		public LogEntry(string channel, string message, string stackTrace, bool isUnityDebug)
 		{
 			this.IsDebug = isUnityDebug;
